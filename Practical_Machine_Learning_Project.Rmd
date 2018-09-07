@@ -1,0 +1,164 @@
+---
+title: "Practical Machine Learning Project"
+author: "Produced by B. Ladouceur"
+date: "September 5, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Introduction
+
+The Internet of Things (IoT) is vastly increasing the amount of sensors and are producing vast quantity of data on a wide variety of systems. Devices such as the Jawbone Up, Nike FuelBand and Fitbit gather data on human beings, for example on their physical activities. In sports, proper form is often more important than the amount of repetitions, yet this is not often looked at by analysis. The intention of this project is to find a forecasting method that will enable us to predict the way a barbell weight will be lifted. It is possible to find more information on the dataset from the following website: http://groupware.les.inf.puc-rio.br/har (section on Weight Lifting Exercise).
+
+The first step of the analysis will be to load the required data as well as to exmine the dimensions as well as the structure.
+```{r}
+#Loading Libraries
+library(caret);library(rpart.plot);library(rattle); library(dplyr);library(e1071);library(caTools)
+#Data load
+Train <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"),header=TRUE)
+dim(Train)
+Test <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"),header=TRUE)
+dim(Test)
+
+str(Train)
+```
+
+##Data Preprocessing
+The pml-training.csv dataset has 19622 cases of 160 variables, while the pml-testing.csv file only has 20 cases with the same variables. We will need to first select which variables should be used within the various models that will be tested. AS we take a look at the dataset, we can observe that many variables have a huge proportion of NAs, which could be a distraction. Some columns could also have very little predictive power, like the first seven whch includes identification of people. We will remove them as well.
+
+
+```{r}
+# Remove variables with more than 95% NAs
+TrainVarRemoved <- which(colSums(is.na(Train) | Train=="")>0.95*dim(Train)[1]) 
+TrainCut <- Train[,-TrainVarRemoved]
+TrainCut <- TrainCut[,-c(1:7)]
+dim(TrainCut)
+# We do the same for the test set
+
+TestCut <- Test[,c("roll_belt","pitch_belt","yaw_belt","total_accel_belt","gyros_belt_x",
+"gyros_belt_y","gyros_belt_z","accel_belt_x","accel_belt_y","accel_belt_z",
+"magnet_belt_x","magnet_belt_y","magnet_belt_z","roll_arm","pitch_arm",
+"yaw_arm","total_accel_arm","gyros_arm_x","gyros_arm_y","gyros_arm_z",
+"accel_arm_x","accel_arm_y","accel_arm_z","magnet_arm_x","magnet_arm_y",
+"magnet_arm_z","roll_dumbbell","pitch_dumbbell","yaw_dumbbell","total_accel_dumbbell",
+"gyros_dumbbell_x","gyros_dumbbell_y","gyros_dumbbell_z","accel_dumbbell_x","accel_dumbbell_y",
+"accel_dumbbell_z","magnet_dumbbell_x","magnet_dumbbell_y","magnet_dumbbell_z","roll_forearm","pitch_forearm","yaw_forearm","total_accel_forearm","gyros_forearm_x","gyros_forearm_y",
+"gyros_forearm_z","accel_forearm_x","accel_forearm_y","accel_forearm_z","magnet_forearm_x",
+"magnet_forearm_y","magnet_forearm_z")]
+
+
+dim(TestCut)
+length(colnames(TestCut))
+dim(TrainCut)
+length(colnames(TrainCut))
+```
+
+
+The TrainCut dataset has only 52 independent variables and 1 dependent variable. Since we don't have the **classe** variable in the TestCut set, we only have have the 52 independent variables.  As we cannot use the TestCut set for validation,  we will need to separate the training set in 2. 
+
+```{r}
+set.seed(00001)
+inTrain1 <- createDataPartition(TrainCut$classe, p=0.75, list=FALSE)
+Train1 <- TrainCut[inTrain1,]
+Test1 <- TrainCut[-inTrain1,]
+dim(Train1)
+dim(Test1)
+```
+
+For this projet, we will compare 4 forecasting methods, 3 of which were part of the class, which are *Classification Tree*, *Random Forest* and *Gradient Boosting*, in the order they were shown during the lectures. The fourth model that will be tried will be a *Principal Component Analysis coupled with a Support Vector Machine*. To deal with overfitting, a 10 fold cross-validation will be used. 
+
+##Classification Tree
+```{r}
+# First model Classification tree
+cv <- trainControl(method="cv", number=10)
+modelClassificationTree <- train(classe~., data=Train1, method="rpart", trControl=cv)
+fancyRpartPlot(modelClassificationTree$finalModel, main="Classification Tree", sub=NULL)
+#prp(modelClassificationTree,main = "default prp\n(type = 0, extra = 0)")
+trainforecast <- predict(modelClassificationTree,newdata=Test1)
+confMatCT <- confusionMatrix(Test1$classe,trainforecast)
+confMatCT$table
+AccuCT <- confMatCT$overall[1]
+OOSE_CT <- 1-AccuCT
+```
+
+We can notice that the accuracy of this first model is not bad at `r AccuCT` with a predicted out of sample error of `r OOSE_CT`, which is better than randomly guessing but still not very high. This means that variable classe will not be predicted very well by the other predictors. So let's take a look at another tool, the random forest which should be more powerful at the cost of some interpretability. 
+
+
+##Random Forest
+```{r}
+model_RandomForest <- train(classe~., data=Train1, method="rf", trControl=cv, verbose=FALSE)
+print(model_RandomForest)
+plot(model_RandomForest,main="Accuracy of Random forest model by number of predictors")
+trainpred <- predict(model_RandomForest,newdata=Test1)
+confMatRF <- confusionMatrix(Test1$classe,trainpred)
+confMatRF$table
+AccuRF <- confMatRF$overall[1]
+AccuRF
+OOSE_RF <- 1-AccuRF
+names(model_RandomForest$finalModel)
+model_RandomForest$finalModel$classes
+plot(model_RandomForest$finalModel,main="Model error of Random forest model by number of trees")
+MostImpVars <- varImp(model_RandomForest)
+MostImpVars
+```
+With random forest, we reach an accuracy of `r AccuRF` using 10 folds cross-validation, which is an excellent result (forecasted Out of Sample Error of `r OOSE_RF`. Let's try another strong method, which is gradient boosting. 
+
+
+##Gradient Boosting
+```{r}
+model_GradientBoosting <- train(classe~., data=Train1, method="gbm", trControl=cv, verbose=FALSE)
+print(model_GradientBoosting)
+plot(model_GradientBoosting)
+trainpred <- predict(model_GradientBoosting,newdata=Test1)
+confMatGBM <- confusionMatrix(Test1$classe,trainpred)
+confMatGBM$table
+AccuGB <- confMatGBM$overall[1]
+OOSE_GB <- 1 - AccuGB
+```
+
+Precision with 10 folds we reach an accuracy of `r AccuGB`, which is very strong but less accurate than the random forest (forecasted out of sample error of `r OOSE_GB`. Let's try another methodology, which is the Support Vector Machine, following a PCA. 
+
+
+##PCA followed by a SVM
+```{r}
+
+training_set = Train1
+test_set = Test1
+pca = preProcess(x = training_set[-53], method = 'pca', pcaComp = 2)
+training_set = predict(pca, training_set)
+training_set = training_set[c(2, 3, 1)]
+test_set = predict(pca, test_set)
+test_set = test_set[c(2, 3, 1)]
+# Fitting SVM to the Training set
+library(e1071)
+classifier = svm(formula = classe ~ .,
+                 data = training_set,
+                 type = 'nu-classification',
+                 kernel = 'linear')
+
+# Predicting the Test set results
+y_pred = predict(classifier, newdata = test_set[-3])
+# Making the Confusion Matrix
+cm = table(test_set[,3], y_pred)
+cm
+AccSvm <- (cm[1,1] + cm[2,2] + cm[3,3] + cm[4,4] + cm[5,5])/sum(cm)*100
+
+```
+
+We can see that dimension reduction is not helping forecasting in this case as the Accuracy is only `r AccSvm`. So better than randomly throwing a dice, but not by much. 
+
+
+#Conclusion
+
+Of the tools we've been using in this project, random forest proved to be the most accurate. As such, this is the model that will be applied to the 20 observations dataset in order to conduct the last forecasting. Another option could have been to build a neural network, but the accuracy of the random forest is already very high so we will apply it to the 20 cases we need to predict. 
+
+
+```{r}
+LastPred <- predict(model_RandomForest,newdata=TestCut)
+LastPred
+```
+
+Thank you for reading this far, one more course and a Capstone to go, keep it up!
